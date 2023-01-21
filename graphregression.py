@@ -43,9 +43,10 @@ def argparser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, default='conv', required=False)
     parser.add_argument('--batch_size', type=int, default=512, required=False)
+    parser.add_argument('--learning_rate', type=float, default=1e-3, required=False)
     parser.add_argument('--num_samples', type=int, default=10000, required=False)
     parser.add_argument('--num_test_samples', type=int, default=50, required=False)
-    parser.add_argument('--epochs', type=int, default=10, required=False)
+    parser.add_argument('--epochs', type=int, default=50, required=False)
     parser.add_argument('--seed', type=int, default=42, required=False)
     return parser.parse_args()
 
@@ -94,25 +95,33 @@ def graph_regression(args):
     dataset = Dataset(args.num_samples, prior)
     dataloader = dgl.dataloading.GraphDataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=False)
 
-    opt = torch.optim.Adam(model.parameters())
+    opt = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     loss_fn = nn.MSELoss()
 
     model.train(True)
-    for _ in range(args.epochs):
+    for ep in range(args.epochs):
         for batched_graph, labels in dataloader:
             opt.zero_grad()
             
             feats = get_normalized_features(batched_graph)
             y_hat = model(batched_graph, feats)
-            loss = loss_fn(y_hat, labels.unsqueeze(-1)) # loss = F.cross_entropy(logits, labels)
+            loss = loss_fn(y_hat, labels.unsqueeze(-1))
             loss.backward()
             opt.step()
+
+        if ep in [10, 20]:
+            print("---Ep:", ep)
+            excess_risk = eval_excess_risk(model, args)
+            rademacher = estimate_rademacher(model, args)
+            print("Excess risk:", excess_risk, "| Rademacher:", rademacher, \
+                "(with M=", model._get_norm(), "=", model._get_layer_norms(),")\n")
     
     return model
 
 
 if __name__ == "__main__":
     args = argparser()
+    print("---------------------\n", "bs:", args.batch_size, "| lr:", args.learning_rate)
 
     torch.manual_seed(args.seed)
     print("training model...")
@@ -121,4 +130,5 @@ if __name__ == "__main__":
     excess_risk = eval_excess_risk(model, args)
     rademacher = estimate_rademacher(model, args)
 
-    print("Excess risk:", excess_risk, "| Rademacher:", rademacher, " (with M=", model._get_norm(), ")\n")
+    print("Excess risk:", excess_risk, "| Rademacher:", rademacher, \
+        "(with M=", model._get_norm(), "=", model._get_layer_norms(),")\n")

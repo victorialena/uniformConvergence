@@ -24,7 +24,7 @@ class GraphRegression(nn.Module):
     def _get_layer_norms(self, _norm=2):
         "_norm specifies which norm to use, e.g., 'fro' for Frobenius norm or 2 for L2-norm."
         with torch.no_grad():
-            return torch.stack([W.norm(_norm) for name, W in self.model.conv.named_parameters() if 'weight' in name] + \
+            return torch.stack([W.norm(_norm) for name, W in self.conv.named_parameters() if 'weight' in name] + \
                 [W.norm(_norm) for name, W in self.readout.named_parameters() if 'weight' in name])
 
     def _get_norm(self, _norm=2):
@@ -41,13 +41,14 @@ class NodeClassification(nn.Module):
         self.readout = nn.Sequential(nn.Linear(hidden_dim, num_classes)) #, nn.Softmax(dim=1))
 
     def forward(self, g, h):
-        h = F.relu(self.conv(g, h))
+        with g.local_scope():
+            h = F.relu(self.conv(g.add_self_loop(), h))
         return self.readout(h)
 
     def _get_layer_norms(self, _norm=2):
         "_norm specifies which norm to use, e.g., 'fro' for Frobenius norm or 2 for L2-norm."
         with torch.no_grad():
-            return torch.stack([W.norm(_norm) for name, W in self.model.conv.named_parameters() if 'weight' in name] + \
+            return torch.stack([W.norm(_norm) for name, W in self.conv.named_parameters() if 'weight' in name] + \
                 [W.norm(_norm) for name, W in self.readout.named_parameters() if 'weight' in name])
 
     def _get_norm(self, _norm=2):

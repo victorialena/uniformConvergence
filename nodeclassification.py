@@ -25,9 +25,9 @@ def argparser():
     parser.add_argument('--num_samples', type=int, default=10000, required=False)
     parser.add_argument('--num_test_samples', type=int, default=50, required=False)
     parser.add_argument('--learning_rate', type=float, default=1e-3, required=False)
-    parser.add_argument('--epochs', type=int, default=10, required=False)
+    parser.add_argument('--epochs', type=int, default=50, required=False)
     parser.add_argument('--seed', type=int, default=42, required=False)
-    parser.add_argument('--norm', type=int, default=1, required=False)
+    parser.add_argument('--norm', type=int, default=2, required=False)
     return parser.parse_args()
 
 
@@ -59,7 +59,7 @@ def sbm(block_size, cov, self_loop=False, directed=False):
 
 
 def sbm_helper(n_blocks, cov, self_loop=False, directed=False):
-    block_size = torch.randint(low=5, high=10, size=(n_blocks,))
+    block_size = torch.randint(low=5, high=25, size=(n_blocks,))
     g = sbm(block_size, cov, self_loop=False, directed=False)
     g.ndata['y'] = torch.repeat_interleave(torch.arange(n_blocks), block_size).unsqueeze(-1)
     return g
@@ -129,28 +129,6 @@ def get_normalized_features(bg, num=5):
     
     return H, mask
 
-def node_classification(args):
-    dataset = Dataset(args.num_samples, sample_cov)
-    dataloader = dgl.dataloading.GraphDataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=False)
-    
-    model = NodeClassification()
-    opt = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    loss_fn = nn.CrossEntropyLoss()
-
-    model.train(True)
-    for _ in range(args.epochs):
-        for batched_graph, _ in dataloader:
-            labels = get_labels(batched_graph)
-            opt.zero_grad()
-            
-            feats, mask = get_normalized_features(batched_graph)
-            logits = model(batched_graph, feats)
-            loss = loss_fn(logits[mask], labels[mask])
-            loss.backward()
-            opt.step()
-    
-    return model
-
 
 def eval_excess_risk(model, args):
     graphs, cov = synthetic_dataset(args.num_test_samples, sample_cov)
@@ -165,15 +143,15 @@ def eval_excess_risk(model, args):
         L_hat = F.cross_entropy(logits[mask], labels[mask])
         Lstar = F.cross_entropy(h_star(batched_graph, mask, cov), labels[mask])
 
-    return L_hat - Lstar
+    return L_hat # - Lstar
 
 
 def get_feature_norm(args):
-    if args._norm == 1:
+    if args.norm == 1:
         return 1
-    elif args._norm == 2: # = max singual value < norm 'fro'
+    elif args.norm == 2: # = max singual value < norm 'fro'
         return np.sqrt(args.batch_size)
-    elif args._norm == 'fro':
+    elif args.norm == 'fro':
         return np.sqrt(args.batch_size)
     raise NotImplementedError("This norm is not implemented.")
 
@@ -183,3 +161,48 @@ def estimate_rademacher(model, args):
     M = model._get_norm(args.norm)
     d = model._depth()
     return B*M*(np.sqrt(2*np.log(2)*d) + 1) / np.sqrt(args.num_samples)
+
+def node_classification(args):
+    dataset = Dataset(args.num_samples, sample_cov)
+    dataloader = dgl.dataloading.GraphDataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=False)
+    
+    model = NodeClassification(NUM_BLOCKS)
+    opt = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    loss_fn = nn.CrossEntropyLoss()
+
+    model.train(True)
+    for ep in range(args.epochs):
+        for batched_graph, _ in dataloader:
+            labels = get_labels(batched_graph)
+            opt.zero_grad()
+            
+            feats, mask = get_normalized_features(batched_graph)
+            logits = model(batched_graph, feats)
+            loss = loss_fn(logits[mask], labels[mask])
+            loss.backward()
+            opt.step()
+    
+    
+        if ep in [10, 20]:
+            print("---Ep:", ep)
+            excess_risk = eval_excess_risk(model, args)
+            rademacher = estimate_rademacher(model, args)
+            print("Excess risk:", excess_risk, "| Rademacher:", rademacher, \
+                "(with M=", model._get_norm(), "=", model._get_layer_norms(),")\n")
+    
+    return model
+
+
+if __name__ == "__main__":
+    args = argparser()
+    print("---------------------\n", "bs:", args.batch_size, "| lr:", args.learning_rate)
+
+    torch.manual_seed(args.seed)
+    print("training model...")
+    model = node_classification(args)
+    print("done. evaluating exces risk...")
+    excess_risk = eval_excess_risk(model, args)
+    rademacher = estimate_rademacher(model, args)
+
+    print("Excess risk:", excess_risk, "| Rademacher:", rademacher, \
+        "(with M=", model._get_norm(), "=", model._get_layer_norms(),")\n")
