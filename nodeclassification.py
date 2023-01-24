@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from csv import DictWriter
 from models import NodeClassification
 
 import pdb
@@ -17,17 +18,20 @@ import random
 NUM_BLOCKS = 3
 NUM_TEST_PER_GRAPH = 5
 
+field_names = ['num_samples', 'epoch', 'excess_risk', 'rademacher', 'M', 'norm', 'batch_size', 'learning_rate']
+
 
 def argparser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_type', type=str, default='conv', required=False)
-    parser.add_argument('--batch_size', type=int, default=512, required=False)
-    parser.add_argument('--num_samples', type=int, default=10000, required=False)
-    parser.add_argument('--num_test_samples', type=int, default=50, required=False)
-    parser.add_argument('--learning_rate', type=float, default=1e-3, required=False)
-    parser.add_argument('--epochs', type=int, default=50, required=False)
-    parser.add_argument('--seed', type=int, default=42, required=False)
-    parser.add_argument('--norm', type=int, default=2, required=False)
+    parser.add_argument('--model_type', type=str, default='conv')
+    parser.add_argument('--batch_size', type=int, default=512)
+    parser.add_argument('--num_samples', type=int, default=10000)
+    parser.add_argument('--frac_test_samples', type=float, default=0.01)
+    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--norm', default=2)
+    parser.add_argument('--normalize', type=bool, default=False)
     return parser.parse_args()
 
 
@@ -108,14 +112,14 @@ def get_labels(bg):
     return F.one_hot(bg.ndata['y'].squeeze()).to(torch.float32)
 
 
-def h_star(g, mask, cov, num=NUM_TEST_PER_GRAPH, logits=True):
+def h_star(g, mask, cov, prior, num=NUM_TEST_PER_GRAPH, logits=True):
     H = get_labels(g)
-    out = torch.stack([H[g.successors(nid)].mm(cov[i//num]).log().sum(0) for i, nid in enumerate(mask)])
+    out = torch.stack([H[g.successors(nid)].mm(cov[i//num]).log().sum(0) + prior[i].log() for i, nid in enumerate(mask)])
     if logits: return out
     return out.softmax(1)
 
 
-def get_normalized_features(bg, num=5):
+def get_normalized_features(bg, num=NUM_TEST_PER_GRAPH):
     mask = get_mask(bg, num=num)
     
     # get prior
@@ -131,7 +135,7 @@ def get_normalized_features(bg, num=5):
 
 
 def eval_excess_risk(model, args):
-    graphs, cov = synthetic_dataset(args.num_test_samples, sample_cov)
+    graphs, cov = synthetic_dataset(int(args.frac_test_samples * args.num_samples), sample_cov)
 
     model.train(False)
     with torch.no_grad():
@@ -141,9 +145,9 @@ def eval_excess_risk(model, args):
 
         logits = model(batched_graph, feats)
         L_hat = F.cross_entropy(logits[mask], labels[mask])
-        Lstar = F.cross_entropy(h_star(batched_graph, mask, cov), labels[mask])
+        Lstar = F.cross_entropy(h_star(batched_graph, mask, cov, feats[mask]), labels[mask])
 
-    return L_hat # - Lstar
+    return L_hat - Lstar
 
 
 def get_feature_norm(args):
@@ -157,16 +161,17 @@ def get_feature_norm(args):
 
 
 def estimate_rademacher(model, args):
-    B = get_feature_norm(args) #1 if args.norm == 1 else # features are normalized
-    M = model._get_norm(args.norm)
-    d = model._depth()
+    B = get_feature_norm(args)
+    M = model.get_norm(args.norm)
+    d = model.depth()
     return B*M*(np.sqrt(2*np.log(2)*d) + 1) / np.sqrt(args.num_samples)
+
 
 def node_classification(args):
     dataset = Dataset(args.num_samples, sample_cov)
     dataloader = dgl.dataloading.GraphDataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=False)
     
-    model = NodeClassification(NUM_BLOCKS)
+    model = NodeClassification(num_classes=NUM_BLOCKS, norm=args.norm if args.normalize else None)
     opt = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     loss_fn = nn.CrossEntropyLoss()
 
@@ -181,15 +186,29 @@ def node_classification(args):
             loss = loss_fn(logits[mask], labels[mask])
             loss.backward()
             opt.step()
-    
-    
+            if args.normalize:
+                model.normalize(args.norm)
+
         if ep in [10, 20]:
             print("---Ep:", ep)
             excess_risk = eval_excess_risk(model, args)
             rademacher = estimate_rademacher(model, args)
             print("Excess risk:", excess_risk, "| Rademacher:", rademacher, \
-                "(with M=", model._get_norm(), "=", model._get_layer_norms(),")\n")
-    
+                "(with M=", model.get_norm(args.norm), "=", model._get_layer_norms(args.norm),")\n")
+
+            dict = {'num_samples': args.num_samples,
+                    'epoch': ep,
+                    'excess_risk': excess_risk.item(),
+                    'rademacher': rademacher.item(),
+                    'M': model.get_norm(args.norm).item(),
+                    'norm': args.norm,
+                    'batch_size': args.batch_size,
+                    'learning_rate': args.learning_rate}
+            with open('node_classification.csv', 'a') as file:
+                dictwriter_object = DictWriter(file, fieldnames=field_names)
+                dictwriter_object.writerow(dict)
+                file.close()
+                    
     return model
 
 
@@ -205,4 +224,17 @@ if __name__ == "__main__":
     rademacher = estimate_rademacher(model, args)
 
     print("Excess risk:", excess_risk, "| Rademacher:", rademacher, \
-        "(with M=", model._get_norm(), "=", model._get_layer_norms(),")\n")
+        "(with M=", model.get_norm(args.norm), "=", model._get_layer_norms(args.norm),")\n")
+
+    dict = {'num_samples': args.num_samples,
+            'epoch': args.epochs,
+            'excess_risk': excess_risk.item(),
+            'rademacher': rademacher.item(),
+            'M': model.get_norm(args.norm).item(),
+            'norm': args.norm,
+            'batch_size': args.batch_size,
+            'learning_rate': args.learning_rate}
+    with open('node_classification.csv', 'a') as file:
+        dictwriter_object = DictWriter(file, fieldnames=field_names)
+        dictwriter_object.writerow(dict)
+        file.close()
