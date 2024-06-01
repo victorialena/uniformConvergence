@@ -1,5 +1,0 @@
-python graphregression.py --batch_size 512 --learning_rate 2e-3 --epochs 30 --num_samples 100 --frac_test_samples 0.1
-python graphregression.py --batch_size 512 --learning_rate 2e-3 --epochs 30 --num_samples 1000 --frac_test_samples 0.1
-python graphregression.py --batch_size 512 --learning_rate 2e-3 --epochs 30 --num_samples 10000 --frac_test_samples 0.1
-python graphregression.py --batch_size 512 --learning_rate 2e-3 --epochs 30 --num_samples 100000
-python graphregression.py --batch_size 512 --learning_rate 2e-3 --epochs 30 --num_samples 1000000

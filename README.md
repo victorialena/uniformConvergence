@@ -1,2 +1,5 @@
 # uniformConvergence
-still figuring out my dating goals
+
+This repository contains the source code accompanying a submission of "The Generalization Gap of Locally Unordered GNNs" to the Machine Learning (Springer) Journal. 
+
+**Abstract** Graph neural networks (GNNs) have emerged as a powerful tool for learning representations on graph-structured data, but understanding their learning capacity remains a challenge. We study the sample complexity of learning in graph neural networks by providing improved bounds on the Rademacher complexity. Previous work limited their analysis to a specific layer type and learning task. In contrast, we generalize our results to various layer architectures and loss functions. Our complexity bounds are adaptive to network architectures and have improved dependence on the network depth. Under additional assumptions, we further show full independence of the network depth and width. We provide empirical evidence to support our results and discuss the implications of our derivations for training graph neural networks.
